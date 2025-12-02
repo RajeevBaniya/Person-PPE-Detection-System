@@ -1,4 +1,4 @@
-# Person and PPE Detection with YOLOv8
+# Person and PPE(Personal Protective Equipment) Detection with YOLOv8
 
 This project implements a two-stage detection system using YOLOv8 for person detection and PPE item detection.
 
