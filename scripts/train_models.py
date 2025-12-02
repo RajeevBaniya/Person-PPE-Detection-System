@@ -6,9 +6,12 @@ import shutil
 import cv2
 import numpy as np
 from pathlib import Path
+from typing import Tuple, List, Dict
 from ultralytics import YOLO
 
-def parse_args():
+
+def parse_args() -> argparse.Namespace:
+    """Parse command line arguments for model training configuration."""
     parser = argparse.ArgumentParser(description='Train YOLOv8 models for person and PPE detection')
     parser.add_argument('--data_dir', type=str, required=True, help='Path to the YOLOv8 formatted dataset')
     parser.add_argument('--weights_dir', type=str, default='weights', help='Directory to save model weights')
@@ -19,16 +22,28 @@ def parse_args():
     parser.add_argument('--ppe_model', type=str, default='yolov8n.pt', help='Base model for PPE detection')
     return parser.parse_args()
 
-def create_person_dataset(data_dir, output_dir):
-    """Create a dataset for person detection only"""
+
+def create_person_dataset(data_dir: str, output_dir: str) -> str:
+    """
+    Create a dataset containing only person class annotations.
+    
+    Filters the full dataset to include only person detections (class 0).
+    
+    Args:
+        data_dir: Source directory containing the full dataset
+        output_dir: Destination directory for person-only dataset
+        
+    Returns:
+        Path to the generated dataset.yaml file
+    """
     os.makedirs(output_dir, exist_ok=True)
     
-    # For Creating folder structure
+    # Create directory structure
     for split in ['train', 'val', 'test']:
         os.makedirs(os.path.join(output_dir, split, 'images'), exist_ok=True)
         os.makedirs(os.path.join(output_dir, split, 'labels'), exist_ok=True)
     
-    # Copy images
+    # Copy all images
     for split in ['train', 'val', 'test']:
         src_img_dir = os.path.join(data_dir, split, 'images')
         dst_img_dir = os.path.join(output_dir, split, 'images')
@@ -36,7 +51,7 @@ def create_person_dataset(data_dir, output_dir):
         for img_file in os.listdir(src_img_dir):
             shutil.copy(os.path.join(src_img_dir, img_file), os.path.join(dst_img_dir, img_file))
     
-    # For Creating labels with only person class (class 0)
+    # Filter labels to keep only person class (class 0)
     for split in ['train', 'val', 'test']:
         src_label_dir = os.path.join(data_dir, split, 'labels')
         dst_label_dir = os.path.join(output_dir, split, 'labels')
@@ -45,13 +60,12 @@ def create_person_dataset(data_dir, output_dir):
             with open(os.path.join(src_label_dir, label_file), 'r') as f:
                 lines = f.readlines()
             
-            # Filter for person class (class 0)
             person_lines = [line for line in lines if line.strip().startswith('0 ')]
             
             with open(os.path.join(dst_label_dir, label_file), 'w') as f:
                 f.writelines(person_lines)
     
-    # Creating dataset.yaml
+    # Generate dataset.yaml configuration
     yaml_path = os.path.join(output_dir, 'dataset.yaml')
     with open(yaml_path, 'w') as f:
         f.write(f"path: {os.path.abspath(output_dir)}\n")
@@ -63,32 +77,45 @@ def create_person_dataset(data_dir, output_dir):
     
     return yaml_path
 
-def create_ppe_dataset_with_cropping(data_dir, output_dir, classes_file):
-    """Create a dataset for PPE detection by cropping person regions"""
+def create_ppe_dataset_with_cropping(data_dir: str, output_dir: str, classes_file: str) -> str:
+    """
+    Create a PPE detection dataset by cropping person regions from full images.
+    
+    This function processes images to crop person bounding boxes and maps PPE annotations
+    to the cropped coordinate space. Each person detection becomes a separate training sample.
+    
+    Args:
+        data_dir: Source directory containing the full dataset
+        output_dir: Destination directory for cropped PPE dataset
+        classes_file: Path to file containing class names
+        
+    Returns:
+        Path to the generated dataset.yaml file
+    """
     os.makedirs(output_dir, exist_ok=True)
     
-    # Reading class names
+    # Load class names from file
     with open(classes_file, 'r') as f:
         class_names = [line.strip() for line in f.readlines() if line.strip()]
     
-    # Filtering out person class and create new class mapping
+    # Create PPE-only class mapping (exclude person class)
     ppe_classes = [cls for cls in class_names if cls != 'person']
     original_class_map = {i: cls for i, cls in enumerate(class_names)}
     new_class_map = {cls: i for i, cls in enumerate(ppe_classes)}
     
-    # For Creating folder structure
+    # Create directory structure
     for split in ['train', 'val', 'test']:
         os.makedirs(os.path.join(output_dir, split, 'images'), exist_ok=True)
         os.makedirs(os.path.join(output_dir, split, 'labels'), exist_ok=True)
     
-    # Processing each split
+    # Process each data split
     for split in ['train', 'val', 'test']:
         src_img_dir = os.path.join(data_dir, split, 'images')
         src_label_dir = os.path.join(data_dir, split, 'labels')
         dst_img_dir = os.path.join(output_dir, split, 'images')
         dst_label_dir = os.path.join(output_dir, split, 'labels')
         
-        # process each image and its labels
+        # Process each image and its annotations
         for img_file in os.listdir(src_img_dir):
             img_path = os.path.join(src_img_dir, img_file)
             label_file = os.path.join(src_label_dir, Path(img_file).stem + '.txt')
@@ -96,32 +123,29 @@ def create_ppe_dataset_with_cropping(data_dir, output_dir, classes_file):
             if not os.path.exists(label_file):
                 continue
             
-            # read image
             img = cv2.imread(img_path)
             if img is None:
                 continue
                 
             img_height, img_width = img.shape[:2]
             
-            # read labels
             with open(label_file, 'r') as f:
                 lines = f.readlines()
             
-            # To Extract person boxes
+            # Extract person bounding boxes from annotations
             person_boxes = []
             for line in lines:
                 parts = line.strip().split()
-                if len(parts) >= 5 and parts[0] == '0':  # Person class is 0
-                    # YOLO format: class_id, x_center, y_center, width, height (normalized)
+                if len(parts) >= 5 and parts[0] == '0':
                     x_center, y_center, width, height = map(float, parts[1:5])
                     
-                    # Converting to pixel coordinates
+                    # Convert from normalized YOLO format to pixel coordinates
                     x_center *= img_width
                     y_center *= img_height
                     width *= img_width
                     height *= img_height
                     
-                    # Calculating box coordinates
+                    # Calculate bounding box corners
                     xmin = max(0, int(x_center - width / 2))
                     ymin = max(0, int(y_center - height / 2))
                     xmax = min(img_width, int(x_center + width / 2))
@@ -129,74 +153,70 @@ def create_ppe_dataset_with_cropping(data_dir, output_dir, classes_file):
                     
                     person_boxes.append((xmin, ymin, xmax, ymax))
             
-            # Processing each person box
+            # Crop each person detection and create individual training samples
             for i, (xmin, ymin, xmax, ymax) in enumerate(person_boxes):
-                # Crop person region
                 person_img = img[ymin:ymax, xmin:xmax]
                 
-                # Skip if cropped image is too small
+                # Skip invalid or tiny crops
                 if person_img.shape[0] < 10 or person_img.shape[1] < 10:
                     continue
                 
-                # For Creating new image filename
+                # Generate unique filename for cropped image
                 new_img_file = f"{Path(img_file).stem}_person_{i}.jpg"
                 new_img_path = os.path.join(dst_img_dir, new_img_file)
                 
-                # To Save cropped image
                 cv2.imwrite(new_img_path, person_img)
                 
-                # For Creating new label file
+                # Create corresponding label file
                 new_label_file = f"{Path(img_file).stem}_person_{i}.txt"
                 new_label_path = os.path.join(dst_label_dir, new_label_file)
                 
-                # Process PPE annotations for this person
+                # Map PPE annotations to cropped coordinate space
                 with open(new_label_path, 'w') as f_out:
                     for line in lines:
                         parts = line.strip().split()
                         if len(parts) >= 5:
                             class_id = int(parts[0])
                             
-                            # Skip person class
                             if class_id == 0:
                                 continue
                             
-                            # To get class name and check if it's in our PPE classes
+                            # Verify class is a PPE item
                             class_name = original_class_map.get(class_id)
                             if class_name not in ppe_classes:
                                 continue
                             
-                            # get normalized coordinates
+                            # Convert from normalized to pixel coordinates
                             x_center, y_center, width, height = map(float, parts[1:5])
                             
-                            # To Convert to pixel coordinates
                             x_center_px = x_center * img_width
                             y_center_px = y_center * img_height
                             width_px = width * img_width
                             height_px = height * img_height
                             
-                            # Calculate box coordinates
+                            # Calculate bounding box corners
                             box_xmin = x_center_px - width_px / 2
                             box_ymin = y_center_px - height_px / 2
                             box_xmax = x_center_px + width_px / 2
                             box_ymax = y_center_px + height_px / 2
                             
-                            # To check if the PPE box overlaps with the person box
+                            # Check if PPE box overlaps with person box
                             if (box_xmin < xmax and box_xmax > xmin and 
                                 box_ymin < ymax and box_ymax > ymin):
                                 
-                                # Calculate intersection
+                                # Calculate intersection region
                                 inter_xmin = max(xmin, box_xmin)
                                 inter_ymin = max(ymin, box_ymin)
                                 inter_xmax = min(xmax, box_xmax)
                                 inter_ymax = min(ymax, box_ymax)
                                 
-                                # To calculate new coordinates relative to the cropped image
+                                # Transform coordinates to cropped image space
                                 new_x_center = (inter_xmin + inter_xmax) / 2 - xmin
                                 new_y_center = (inter_ymin + inter_ymax) / 2 - ymin
                                 new_width = inter_xmax - inter_xmin
                                 new_height = inter_ymax - inter_ymin
                                 
-                                # Normalize coordinates
+                                # Normalize to cropped image dimensions
                                 person_width = xmax - xmin
                                 person_height = ymax - ymin
                                 new_x_center /= person_width
@@ -204,16 +224,16 @@ def create_ppe_dataset_with_cropping(data_dir, output_dir, classes_file):
                                 new_width /= person_width
                                 new_height /= person_height
                                 
-                                # Write to file with new class ID
+                                # Write annotation with remapped class ID
                                 new_class_id = new_class_map[class_name]
                                 f_out.write(f"{new_class_id} {new_x_center:.6f} {new_y_center:.6f} {new_width:.6f} {new_height:.6f}\n")
                 
-                # for removing empty label files
+                # Remove empty label files and corresponding images
                 if os.path.exists(new_label_path) and os.path.getsize(new_label_path) == 0:
                     os.remove(new_label_path)
                     os.remove(new_img_path)
     
-    # Creating dataset.yaml
+    # Generate dataset.yaml configuration
     yaml_path = os.path.join(output_dir, 'dataset.yaml')
     with open(yaml_path, 'w') as f:
         f.write(f"path: {os.path.abspath(output_dir)}\n")
@@ -225,12 +245,26 @@ def create_ppe_dataset_with_cropping(data_dir, output_dir, classes_file):
     
     return yaml_path
 
-def train_model(yaml_path, model_type, weights_dir, model_name, epochs, batch_size, img_size):
-    """Train a YOLOv8 model"""
-    # Create model
+
+def train_model(yaml_path: str, model_type: str, weights_dir: str, 
+                model_name: str, epochs: int, batch_size: int, img_size: int) -> str:
+    """
+    Train a YOLOv8 model with specified configuration.
+    
+    Args:
+        yaml_path: Path to dataset configuration YAML
+        model_type: Base model architecture (e.g., 'yolov8n.pt')
+        weights_dir: Directory to save training outputs
+        model_name: Name for this training run
+        epochs: Number of training epochs
+        batch_size: Training batch size
+        img_size: Input image size
+        
+    Returns:
+        Path to the best model weights
+    """
     model = YOLO(model_type)
     
-    # Train model
     results = model.train(
         data=yaml_path,
         epochs=epochs,
@@ -242,27 +276,27 @@ def train_model(yaml_path, model_type, weights_dir, model_name, epochs, batch_si
         name=model_name
     )
     
-    # Returning path to best weights
     return os.path.join(weights_dir, model_name, 'weights', 'best.pt')
 
-def main():
+
+def main() -> None:
+    """Main execution function for training person and PPE detection models."""
     args = parse_args()
     
-    # Creating weights directory
     os.makedirs(args.weights_dir, exist_ok=True)
     
-    # Creating person dataset
+    # Prepare person detection dataset
     print("Creating person detection dataset...")
     person_data_dir = os.path.join(args.data_dir, 'person_dataset')
     person_yaml = create_person_dataset(args.data_dir, person_data_dir)
     
-    # Create PPE dataset with cropping
+    # Prepare PPE detection dataset with cropped person regions
     print("Creating PPE detection dataset with person cropping...")
     ppe_data_dir = os.path.join(args.data_dir, 'ppe_dataset')
     classes_file = os.path.join(args.data_dir, 'classes.txt')
     ppe_yaml = create_ppe_dataset_with_cropping(args.data_dir, ppe_data_dir, classes_file)
     
-    # Training person detection model
+    # Train person detection model
     print("Training person detection model...")
     person_model_path = train_model(
         person_yaml,
@@ -274,7 +308,7 @@ def main():
         args.img_size
     )
     
-    # Training PPE detection model
+    # Train PPE detection model
     print("Training PPE detection model...")
     ppe_model_path = train_model(
         ppe_yaml,
@@ -289,6 +323,7 @@ def main():
     print(f"Training complete. Models saved to:")
     print(f"Person detection model: {person_model_path}")
     print(f"PPE detection model: {ppe_model_path}")
+
 
 if __name__ == "__main__":
     main()
