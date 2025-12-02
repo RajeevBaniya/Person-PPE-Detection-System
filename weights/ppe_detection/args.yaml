@@ -1,7 +1,7 @@
 task: detect
 mode: train
 model: yolov8n.pt
-data: E:/Assignment/data/yolo_dataset\ppe_dataset\dataset.yaml
+data: datasets/yolo_dataset/ppe_dataset/dataset.yaml
 epochs: 1
 time: null
 patience: 10
@@ -12,7 +12,7 @@ save_period: -1
 cache: false
 device: null
 workers: 8
-project: E:/Assignment/weights
+project: weights
 name: ppe_detection
 exist_ok: false
 pretrained: true
@@ -103,4 +103,4 @@ erasing: 0.4
 crop_fraction: 1.0
 cfg: null
 tracker: botsort.yaml
-save_dir: E:\Assignment\weights\ppe_detection
+save_dir: weights/ppe_detection
